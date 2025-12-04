@@ -37,19 +37,15 @@ DATA_FILES = {
 # --- 2. DATA LOADING FUNCTION ---
 @st.cache_data
 def load_data(region_key):
-    """Loads and cleans data for the selected region."""
     files = DATA_FILES.get(region_key)
     if not files:
         return pd.DataFrame() 
 
     try:
-        # Load Raw CSVs
         inc_df = pd.read_csv(files["incidence"])
         rr_df = pd.read_csv(files["rr"])
 
-        # 1. Clean Incidence Data
-        # Check if 'Category' exists, if not assume it's already 'year' or similar
-        # Standardize column names
+        # Clean Incidence Data
         if 'Category' in inc_df.columns:
             inc_df = inc_df.rename(columns={'Category': 'year'})
         
@@ -58,11 +54,10 @@ def load_data(region_key):
             'Uncertainty interval (low)': 'tb_incidence_low',
             'Uncertainty interval (high)': 'tb_incidence_high'
         })
-        # Keep only relevant columns (ensure columns exist before selecting)
         cols_to_keep = ['year', 'tb_incidence', 'tb_incidence_low', 'tb_incidence_high']
         inc_clean = inc_clean[[c for c in cols_to_keep if c in inc_clean.columns]]
 
-        # 2. Clean RR Prevalence Data
+        # Clean RR Prevalence Data
         if 'Category' in rr_df.columns:
             rr_df = rr_df.rename(columns={'Category': 'year'})
             
@@ -73,10 +68,9 @@ def load_data(region_key):
         cols_to_keep_rr = ['year', 'rr_prev_prevtx', 'rr_prev_new']
         rr_clean = rr_clean[[c for c in cols_to_keep_rr if c in rr_clean.columns]]
 
-        # 3. Merge Datasets
+        # Merge
         if not inc_clean.empty and not rr_clean.empty:
             merged = pd.merge(inc_clean, rr_clean, on='year', how='inner')
-            # 4. Filter for 2015-2023 as requested
             merged = merged[(merged['year'] >= 2015) & (merged['year'] <= 2023)]
             return merged
         else:
@@ -90,9 +84,9 @@ def load_data(region_key):
 st.set_page_config(page_title="TB Trends Visualization", layout="wide")
 
 st.title("Trend comparison of TB incidence and RR-TB prevalence (2015–2023)")
-st.markdown("This visualization explores the relationship between disease burden and drug resistance over time.")
+st.markdown("### Disease Burden vs. Drug Resistance")
 
-# --- 4. INTERACTIVE CONTROLS (SELECTION BAR) ---
+# --- 4. INTERACTIVE CONTROLS ---
 region_options = [
     "Global",
     "WHO African Region",
@@ -105,19 +99,24 @@ region_options = [
 
 selected_region = st.selectbox("Select WHO Region:", region_options)
 
-# Load Data based on selection
+# Load Data
 df = load_data(selected_region)
 
 if df.empty:
-    st.warning(f"Data not found for **{selected_region}**. Please ensure the CSV files are uploaded correctly to your repository.")
+    st.warning(f"Data not found for **{selected_region}**.")
 else:
     # --- 5. ALTAIR VISUALIZATION ---
     
-    # Define colors
+    # Define Colors
     COLOR_INCIDENCE = "#2ca02c"      # Green
     COLOR_CI = "#98df8a"             # Light Green
     COLOR_RR_PREV = "#ffbb78"        # Light Orange
     COLOR_RR_NEW = "#ff7f0e"         # Dark Orange
+
+    # Define Readable Labels (for the Legend)
+    LABEL_INCIDENCE = "TB Incidence (per 100k)"
+    LABEL_RR_PREV = "RR-TB: Previously Treated Cases (%)"
+    LABEL_RR_NEW = "RR-TB: New Cases (%)"
     
     # Base chart
     base = alt.Chart(df).encode(
@@ -135,25 +134,34 @@ else:
         ]
     )
 
-    # Layer 2: Lines (using transform_fold)
+    # Layer 2: Lines (Interactive Legend Logic)
+    # 1. Fold the columns (transform wide to long)
+    # 2. Calculate a new column 'Legend Label' to replace cryptic codes with readable text
     lines_base = base.transform_fold(
         ['tb_incidence', 'rr_prev_prevtx', 'rr_prev_new'],
-        as_=['Indicator', 'Value']
+        as_=['Indicator_Code', 'Value']
+    ).transform_calculate(
+        # Vega Expression to map codes to readable labels
+        Legend_Label="datum.Indicator_Code == 'tb_incidence' ? '" + LABEL_INCIDENCE + "' : " +
+                     "datum.Indicator_Code == 'rr_prev_prevtx' ? '" + LABEL_RR_PREV + "' : '" + LABEL_RR_NEW + "'"
     )
 
     lines = lines_base.mark_line(point=True, strokeWidth=3).encode(
-        y=alt.Y('Value:Q', axis=alt.Axis(title='Indicator value')),
-        color=alt.Color('Indicator:N', 
+        y=alt.Y('Value:Q', axis=alt.Axis(title='Indicator Value')),
+        # Use the NEW readable label column for Color
+        color=alt.Color('Legend_Label:N', 
                         scale=alt.Scale(
-                            domain=['tb_incidence', 'rr_prev_prevtx', 'rr_prev_new'],
+                            # Map the readable labels to colors
+                            domain=[LABEL_INCIDENCE, LABEL_RR_PREV, LABEL_RR_NEW],
                             range=[COLOR_INCIDENCE, COLOR_RR_PREV, COLOR_RR_NEW]
                         ),
-                        legend=alt.Legend(title="Indicator Type", orient='right')
+                        legend=alt.Legend(title="Indicator Details", orient='right') # Legend Title
         ),
+        # Tooltip now uses the readable label
         tooltip=[
             alt.Tooltip('year:O', title='Year'),
-            alt.Tooltip('Indicator:N', title='Indicator'),
-            alt.Tooltip('Value:Q', title='Value', format='.2f')
+            alt.Tooltip('Legend_Label:N', title='Type'),
+            alt.Tooltip('Value:Q', title='Value', format='.1f')
         ]
     )
 
@@ -161,12 +169,13 @@ else:
         ci_band,
         lines
     ).properties(
-        title=f"{selected_region}: Incidence vs. Resistance",
+        title=f"{selected_region}: Incidence & Resistance Trends",
         height=500
     ).interactive()
 
     st.altair_chart(chart, use_container_width=True)
     
-    # Expander to see raw data
+    st.caption("Note: 'Incidence' is a rate per 100,000 population. 'RR-TB' values are percentages (%). Comparison focuses on trend direction.")
+
     with st.expander("View Source Data"):
         st.dataframe(df)
