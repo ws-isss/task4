@@ -3,8 +3,6 @@ import altair as alt
 import pandas as pd
 
 # --- 1. CONFIGURATION & FILE PATHS ---
-# 映射下拉菜单选项到对应的 CSV 文件名
-# 注意：文件名基于你之前上传的文件
 DATA_FILES = {
     "Global": {
         "incidence": "GTB_report_2025_incidence.csv",
@@ -42,7 +40,7 @@ def load_data(region_key):
     """Loads and cleans data for the selected region."""
     files = DATA_FILES.get(region_key)
     if not files:
-        return pd.DataFrame() # Return empty if not found
+        return pd.DataFrame() 
 
     try:
         # Load Raw CSVs
@@ -50,31 +48,39 @@ def load_data(region_key):
         rr_df = pd.read_csv(files["rr"])
 
         # 1. Clean Incidence Data
-        # Rename columns to standardized internal names
+        # Check if 'Category' exists, if not assume it's already 'year' or similar
+        # Standardize column names
+        if 'Category' in inc_df.columns:
+            inc_df = inc_df.rename(columns={'Category': 'year'})
+        
         inc_clean = inc_df.rename(columns={
-            'Category': 'year',
             'Estimated TB incidence per 100 000 population': 'tb_incidence',
             'Uncertainty interval (low)': 'tb_incidence_low',
             'Uncertainty interval (high)': 'tb_incidence_high'
         })
-        # Keep only relevant columns
-        inc_clean = inc_clean[['year', 'tb_incidence', 'tb_incidence_low', 'tb_incidence_high']]
+        # Keep only relevant columns (ensure columns exist before selecting)
+        cols_to_keep = ['year', 'tb_incidence', 'tb_incidence_low', 'tb_incidence_high']
+        inc_clean = inc_clean[[c for c in cols_to_keep if c in inc_clean.columns]]
 
         # 2. Clean RR Prevalence Data
+        if 'Category' in rr_df.columns:
+            rr_df = rr_df.rename(columns={'Category': 'year'})
+            
         rr_clean = rr_df.rename(columns={
-            'Category': 'year',
             'Previously treated pulmonary bacteriologically confirmed cases': 'rr_prev_prevtx',
             'New pulmonary bacteriologically confirmed cases': 'rr_prev_new'
         })
-        rr_clean = rr_clean[['year', 'rr_prev_prevtx', 'rr_prev_new']]
+        cols_to_keep_rr = ['year', 'rr_prev_prevtx', 'rr_prev_new']
+        rr_clean = rr_clean[[c for c in cols_to_keep_rr if c in rr_clean.columns]]
 
         # 3. Merge Datasets
-        merged = pd.merge(inc_clean, rr_clean, on='year', how='inner')
-
-        # 4. Filter for 2015-2023 as requested
-        merged = merged[(merged['year'] >= 2015) & (merged['year'] <= 2023)]
-        
-        return merged
+        if not inc_clean.empty and not rr_clean.empty:
+            merged = pd.merge(inc_clean, rr_clean, on='year', how='inner')
+            # 4. Filter for 2015-2023 as requested
+            merged = merged[(merged['year'] >= 2015) & (merged['year'] <= 2023)]
+            return merged
+        else:
+            return pd.DataFrame()
 
     except Exception as e:
         st.error(f"Error loading data for {region_key}: {e}")
@@ -87,7 +93,6 @@ st.title("Trend comparison of TB incidence and RR-TB prevalence (2015–2023)")
 st.markdown("This visualization explores the relationship between disease burden and drug resistance over time.")
 
 # --- 4. INTERACTIVE CONTROLS (SELECTION BAR) ---
-# Exact categories as requested
 region_options = [
     "Global",
     "WHO African Region",
@@ -104,12 +109,9 @@ selected_region = st.selectbox("Select WHO Region:", region_options)
 df = load_data(selected_region)
 
 if df.empty:
-    st.warning("Data not found for this region. Please ensure CSV files are uploaded.")
+    st.warning(f"Data not found for **{selected_region}**. Please ensure the CSV files are uploaded correctly to your repository.")
 else:
     # --- 5. ALTAIR VISUALIZATION ---
-    
-    # We need to transform the data to Long Format to create a proper legend for the lines.
-    # The CI Band will be a separate layer.
     
     # Define colors
     COLOR_INCIDENCE = "#2ca02c"      # Green
@@ -123,26 +125,22 @@ else:
     )
 
     # Layer 1: 95% Confidence Interval (Band)
-    # This stands alone as an area chart
     ci_band = base.mark_area(opacity=0.3, color=COLOR_CI).encode(
         y=alt.Y('tb_incidence_low:Q'),
         y2=alt.Y2('tb_incidence_high:Q'),
         tooltip=[
-            alt.Tooltip('year', title='Year'),
-            alt.Tooltip('tb_incidence_low', title='Incidence CI Low'),
-            alt.Tooltip('tb_incidence_high', title='Incidence CI High')
+            alt.Tooltip('year:O', title='Year'),
+            alt.Tooltip('tb_incidence_low:Q', title='Incidence CI Low'),
+            alt.Tooltip('tb_incidence_high:Q', title='Incidence CI High')
         ]
     )
 
-    # To create a unified legend for the lines, we fold the columns.
-    # We create a new dataframe for the lines part or use transform_fold
+    # Layer 2: Lines (using transform_fold)
     lines_base = base.transform_fold(
         ['tb_incidence', 'rr_prev_prevtx', 'rr_prev_new'],
         as_=['Indicator', 'Value']
     )
 
-    # Layer 2: Lines
-    # We manually map the fold names to colors to match requirements
     lines = lines_base.mark_line(point=True, strokeWidth=3).encode(
         y=alt.Y('Value:Q', axis=alt.Axis(title='Indicator value')),
         color=alt.Color('Indicator:N', 
@@ -150,14 +148,15 @@ else:
                             domain=['tb_incidence', 'rr_prev_prevtx', 'rr_prev_new'],
                             range=[COLOR_INCIDENCE, COLOR_RR_PREV, COLOR_RR_NEW]
                         ),
-                        legend=alt.Legend(title="Legend", orient='right')
+                        legend=alt.Legend(title="Indicator Type", orient='right')
         ),
-        tooltip=['year', 'Indicator', 'Value']
+        tooltip=[
+            alt.Tooltip('year:O', title='Year'),
+            alt.Tooltip('Indicator:N', title='Indicator'),
+            alt.Tooltip('Value:Q', title='Value', format='.2f')
+        ]
     )
 
-    # Combine Layers
-    # Note: We are using a single Y-axis ("Indicator value") for both rates and percentages
-    # as per the "compare trend direction" instruction.
     chart = alt.layer(
         ci_band,
         lines
@@ -168,6 +167,6 @@ else:
 
     st.altair_chart(chart, use_container_width=True)
     
-    # Optional: Display raw data snippet for verification
-    with st.expander("View Data Source"):
+    # Expander to see raw data
+    with st.expander("View Source Data"):
         st.dataframe(df)
