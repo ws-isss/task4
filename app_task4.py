@@ -1,146 +1,173 @@
 import streamlit as st
-import pandas as pd
 import altair as alt
+import pandas as pd
 
+# --- 1. CONFIGURATION & FILE PATHS ---
+# 映射下拉菜单选项到对应的 CSV 文件名
+# 注意：文件名基于你之前上传的文件
 DATA_FILES = {
     "Global": {
         "incidence": "GTB_report_2025_incidence.csv",
-        "rr": "GTB_report_2025_RR_prevalence.csv",
-        "description": "Worldwide average trends showing the overall global picture."
+        "rr": "GTB_report_2025_RR_prevalence.csv"
     },
-    "African Region": {
+    "WHO African Region": {
         "incidence": "African_region_report_2025_incidence.csv",
-        "rr": "African_region_report_2025_RR_prevalence.csv",
-        "description": "High burden region showing significant progress in reducing incidence."
+        "rr": "African_region_report_2025_RR_prevalence.csv"
     },
-    "Region of the Americas": {
+    "WHO/PAHO Region of the Americas": {
         "incidence": "Region_of_the_Americas_report_2025_incidence.csv",
-        "rr": "Region_of_the_Americas_report_2025_RR_prevalence.csv",
-        "description": "Region with relatively low TB incidence compared to global averages."
+        "rr": "Region_of_the_Americas_report_2025_RR_prevalence.csv"
     },
-    "Eastern Mediterranean Region": {
+    "WHO Eastern Mediterranean Region": {
         "incidence": "Eastern_Mediterranean_region_report_2025_incidence.csv",
-        "rr": "Eastern_Mediterranean_region_report_2025_RR_prevalence.csv",
-        "description": "Shows distinct trends in resistance reduction among treated cases."
+        "rr": "Eastern_Mediterranean_region_report_2025_RR_prevalence.csv"
     },
-    "European Region": {
+    "WHO European Region": {
         "incidence": "European_region_report_2025_incidence.csv",
-        "rr": "European_region_report_2025_RR_prevalence.csv",
-        "description": "Characterized by lower incidence but exceptionally high rates of drug resistance."
+        "rr": "European_region_report_2025_RR_prevalence.csv"
     },
-    "South-East Asia Region": {
+    "WHO South-East Asia Region": {
         "incidence": "South_East_Asia_Region_report_2025_incidence.csv",
-        "rr": "South_East_Asia_Region_report_2025_RR_prevalence.csv",
-        "description": "Region with a very high incidence burden."
+        "rr": "South_East_Asia_Region_report_2025_RR_prevalence.csv"
     },
-    "Western Pacific Region": {
+    "WHO Western Pacific Region": {
         "incidence": "Western_Pacific_Region_report_2025_incidence.csv",
-        "rr": "Western_Pacific_Region_report_2025_RR_prevalence.csv",
-        "description": "Diverse region showing steady declines in incidence."
+        "rr": "Western_Pacific_Region_report_2025_RR_prevalence.csv"
     }
 }
 
+# --- 2. DATA LOADING FUNCTION ---
 @st.cache_data
-def load_and_process_data(region_name):
-    files = DATA_FILES.get(region_name)
+def load_data(region_key):
+    """Loads and cleans data for the selected region."""
+    files = DATA_FILES.get(region_key)
     if not files:
-        return None
+        return pd.DataFrame() # Return empty if not found
 
     try:
+        # Load Raw CSVs
         inc_df = pd.read_csv(files["incidence"])
         rr_df = pd.read_csv(files["rr"])
 
-        if 'Category' in inc_df.columns:
-            inc_df = inc_df.rename(columns={'Category': 'Year'})
-        if 'Category' in rr_df.columns:
-            rr_df = rr_df.rename(columns={'Category': 'Year'})
+        # 1. Clean Incidence Data
+        # Rename columns to standardized internal names
+        inc_clean = inc_df.rename(columns={
+            'Category': 'year',
+            'Estimated TB incidence per 100 000 population': 'tb_incidence',
+            'Uncertainty interval (low)': 'tb_incidence_low',
+            'Uncertainty interval (high)': 'tb_incidence_high'
+        })
+        # Keep only relevant columns
+        inc_clean = inc_clean[['year', 'tb_incidence', 'tb_incidence_low', 'tb_incidence_high']]
 
-        # Merge on Year (Inner join to keep matching years)
-        merged = pd.merge(inc_df, rr_df, on='Year', how='inner')
+        # 2. Clean RR Prevalence Data
+        rr_clean = rr_df.rename(columns={
+            'Category': 'year',
+            'Previously treated pulmonary bacteriologically confirmed cases': 'rr_prev_prevtx',
+            'New pulmonary bacteriologically confirmed cases': 'rr_prev_new'
+        })
+        rr_clean = rr_clean[['year', 'rr_prev_prevtx', 'rr_prev_new']]
+
+        # 3. Merge Datasets
+        merged = pd.merge(inc_clean, rr_clean, on='year', how='inner')
+
+        # 4. Filter for 2015-2023 as requested
+        merged = merged[(merged['year'] >= 2015) & (merged['year'] <= 2023)]
+        
         return merged
-    except FileNotFoundError:
-        return None
+
     except Exception as e:
-        st.error(f"Error processing {region_name}: {e}")
-        return None
+        st.error(f"Error loading data for {region_key}: {e}")
+        return pd.DataFrame()
 
-st.set_page_config(page_title="TB Task 4", layout="wide")
-st.title("Task 4: Drug Resistance vs. Disease Incidence")
-st.markdown("""
-### Explore Global and Regional Trends
-Compare how the percentage of Rifampicin-Resistant TB (RR-TB) relates to overall TB incidence across different WHO regions.
-""")
+# --- 3. STREAMLIT APP LAYOUT ---
+st.set_page_config(page_title="TB Trends Visualization", layout="wide")
 
-st.sidebar.header("Filter Settings")
+st.title("Trend comparison of TB incidence and RR-TB prevalence (2015–2023)")
+st.markdown("This visualization explores the relationship between disease burden and drug resistance over time.")
 
-available_regions = list(DATA_FILES.keys())
-selected_region = st.sidebar.selectbox("Select Region / View:", available_regions)
+# --- 4. INTERACTIVE CONTROLS (SELECTION BAR) ---
+# Exact categories as requested
+region_options = [
+    "Global",
+    "WHO African Region",
+    "WHO/PAHO Region of the Americas",
+    "WHO Eastern Mediterranean Region",
+    "WHO European Region",
+    "WHO South-East Asia Region",
+    "WHO Western Pacific Region"
+]
 
-current_df = load_and_process_data(selected_region)
+selected_region = st.selectbox("Select WHO Region:", region_options)
 
-if selected_region in DATA_FILES:
-    st.sidebar.info(f"**{selected_region}:** {DATA_FILES[selected_region]['description']}")
+# Load Data based on selection
+df = load_data(selected_region)
 
-if current_df is not None:
-    st.subheader(f"Trends in {selected_region}")
+if df.empty:
+    st.warning("Data not found for this region. Please ensure CSV files are uploaded.")
+else:
+    # --- 5. ALTAIR VISUALIZATION ---
     
-    base = alt.Chart(current_df).encode(
-        x=alt.X('Year:O', axis=alt.Axis(title='Year'))
+    # We need to transform the data to Long Format to create a proper legend for the lines.
+    # The CI Band will be a separate layer.
+    
+    # Define colors
+    COLOR_INCIDENCE = "#2ca02c"      # Green
+    COLOR_CI = "#98df8a"             # Light Green
+    COLOR_RR_PREV = "#ffbb78"        # Light Orange
+    COLOR_RR_NEW = "#ff7f0e"         # Dark Orange
+    
+    # Base chart
+    base = alt.Chart(df).encode(
+        x=alt.X('year:O', axis=alt.Axis(title='Year'))
     )
 
-    line_incidence = base.mark_line(point=True, strokeDash=[5,5]).encode(
-        y=alt.Y('Estimated TB incidence per 100 000 population', 
-                axis=alt.Axis(title='Incidence per 100k (Blue)', titleColor='#1f77b4')),
-        tooltip=['Year', alt.Tooltip('Estimated TB incidence per 100 000 population', title='Incidence')]
-    ).mark_line(color='#1f77b4')
+    # Layer 1: 95% Confidence Interval (Band)
+    # This stands alone as an area chart
+    ci_band = base.mark_area(opacity=0.3, color=COLOR_CI).encode(
+        y=alt.Y('tb_incidence_low:Q'),
+        y2=alt.Y2('tb_incidence_high:Q'),
+        tooltip=[
+            alt.Tooltip('year', title='Year'),
+            alt.Tooltip('tb_incidence_low', title='Incidence CI Low'),
+            alt.Tooltip('tb_incidence_high', title='Incidence CI High')
+        ]
+    )
 
-    line_rr_new = base.mark_line(point=True).encode(
-        y=alt.Y('New pulmonary bacteriologically confirmed cases', 
-                axis=alt.Axis(title='RR-TB Prevalence % (Green/Red)', titleColor='#d62728')), 
-        tooltip=['Year', alt.Tooltip('New pulmonary bacteriologically confirmed cases', title='RR % (New)')]
-    ).mark_line(color='#2ca02c')
+    # To create a unified legend for the lines, we fold the columns.
+    # We create a new dataframe for the lines part or use transform_fold
+    lines_base = base.transform_fold(
+        ['tb_incidence', 'rr_prev_prevtx', 'rr_prev_new'],
+        as_=['Indicator', 'Value']
+    )
 
-    line_rr_prev = base.mark_line(point=True).encode(
-        y=alt.Y('Previously treated pulmonary bacteriologically confirmed cases', 
-                axis=alt.Axis(title='RR-TB Prevalence %')), 
-        tooltip=['Year', alt.Tooltip('Previously treated pulmonary bacteriologically confirmed cases', title='RR % (Prev. Treated)')]
-    ).mark_line(color='#d62728')
+    # Layer 2: Lines
+    # We manually map the fold names to colors to match requirements
+    lines = lines_base.mark_line(point=True, strokeWidth=3).encode(
+        y=alt.Y('Value:Q', axis=alt.Axis(title='Indicator value')),
+        color=alt.Color('Indicator:N', 
+                        scale=alt.Scale(
+                            domain=['tb_incidence', 'rr_prev_prevtx', 'rr_prev_new'],
+                            range=[COLOR_INCIDENCE, COLOR_RR_PREV, COLOR_RR_NEW]
+                        ),
+                        legend=alt.Legend(title="Legend", orient='right')
+        ),
+        tooltip=['year', 'Indicator', 'Value']
+    )
 
+    # Combine Layers
+    # Note: We are using a single Y-axis ("Indicator value") for both rates and percentages
+    # as per the "compare trend direction" instruction.
     chart = alt.layer(
-        line_incidence, 
-        line_rr_new, 
-        line_rr_prev
-    ).resolve_scale(
-        y='independent' 
+        ci_band,
+        lines
     ).properties(
-        height=450
+        title=f"{selected_region}: Incidence vs. Resistance",
+        height=500
     ).interactive()
 
     st.altair_chart(chart, use_container_width=True)
-
-    st.divider()
-    st.markdown("### 📊 Key Observations")
     
-    latest_year = current_df['Year'].max()
-    latest_inc = current_df.loc[current_df['Year'] == latest_year, 'Estimated TB incidence per 100 000 population'].values[0]
-    
-    st.write(f"In **{latest_year}**, the estimated TB incidence in **{selected_region}** was **{latest_inc:.1f}** per 100,000 population.")
-
-    if selected_region == "European Region":
-        st.warning("⚠️ **Critical Insight:** Europe has a unique pattern. While incidence is low, the drug resistance in *previously treated cases* is alarmingly high (over 50%), highlighting a crisis in antibiotic effectiveness for relapsed patients.")
-    elif selected_region == "African Region":
-        st.success("✅ **Progress:** The African region started with a very high burden but shows a steep downward trend in incidence, indicating successful disease control interventions.")
-    elif selected_region == "Region of the Americas":
-        st.info("ℹ️ **Low Burden:** The Americas maintain one of the lowest incidence rates globally, though surveillance for resistance remains important.")
-    elif selected_region == "Global":
-        st.write("🌍 **Global Trend:** Overall, we see a positive correlation where resistance rates are slowly declining alongside incidence, suggesting that global control strategies are working, though gaps remain.")
-    
-else:
-    st.error(f"⚠️ Data files for **{selected_region}** not found.")
-    st.code(f"Please ensure these files are in your directory:\n- {DATA_FILES[selected_region]['incidence']}\n- {DATA_FILES[selected_region]['rr']}")
-
-st.caption("""
-**Legend:** - 🔵 **Blue (Left Axis):** Estimated TB Incidence per 100k.
-- 🟢 **Green (Right Axis):** % of RR-TB in New Cases.
-- 🔴 **Red (Right Axis):** % of RR-TB in Previously Treated Cases.
-""")
+    # Optional: Display raw data snippet for verification
+    with st.expander("View Data Source"):
+        st.dataframe(df)
